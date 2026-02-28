@@ -8,7 +8,7 @@ on:
       version:
         description: "Package version (example: 0.1.0-beta.1)"
         required: false
-        default: "0.1.0-beta.1"
+        default: ""
 
 jobs:
   publish:
@@ -24,6 +24,18 @@ jobs:
         id: meta
         shell: bash
         run: |
+          manifest_version="$(python - <<'PY'
+          import re
+          from pathlib import Path
+
+          content = Path("pubspec.yaml").read_text(encoding="utf-8")
+          match = re.search(r'(?m)^version\s*:\s*([^\s#]+)', content)
+          if not match:
+              raise SystemExit("Failed to read package version from pubspec.yaml")
+          print(match.group(1).strip())
+          PY
+          )"
+
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             version="${GITHUB_REF_NAME#v}"
           else
@@ -31,35 +43,18 @@ jobs:
           fi
 
           if [[ -z "${version}" ]]; then
-            echo "Version input is required." >&2
+            version="${manifest_version}"
+          fi
+
+          if [[ "${version}" != "${manifest_version}" ]]; then
+            echo "Requested version (${version}) does not match pubspec.yaml version (${manifest_version})." >&2
+            echo "Please update pubspec.yaml and CHANGELOG.md first, then re-run publish." >&2
             exit 1
           fi
 
-          echo "package_version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "package_version=${manifest_version}" >> "${GITHUB_OUTPUT}"
           echo "tag_name=v${version}" >> "${GITHUB_OUTPUT}"
       - uses: dart-lang/setup-dart@v1
-      - name: Set package version in pubspec.yaml
-        shell: bash
-        env:
-          PACKAGE_VERSION: ${{ steps.meta.outputs.package_version }}
-        run: |
-          python - <<'PY'
-          import os
-          import re
-          from pathlib import Path
-
-          path = Path("pubspec.yaml")
-          content = path.read_text(encoding="utf-8")
-          updated, count = re.subn(
-              r'(?m)^version\s*:\s*.*$',
-              f'version: {os.environ["PACKAGE_VERSION"]}',
-              content,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit("Failed to update version in pubspec.yaml")
-          path.write_text(updated, encoding="utf-8")
-          PY
       - run: dart pub get
       - run: dart format --output=none --set-exit-if-changed .
       - run: dart analyze
